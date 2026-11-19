@@ -16,6 +16,8 @@ SwiftFlow(nodes: nodes, edges: edges, ..., panOnDrag: true) { ... }
 
 When `selectionOnDrag: true`, the roles reverse: dragging creates a selection box, and **Shift+drag** pans.
 
+A `CanvasTool` value makes those roles exclusive and matches the neighboring Controls tool cluster: `.pan` (hand tool, `H`) always pans the pane and does not drag nodes; `.pointer` (move, `V`) box-selects on drag (Shift+drag still pans) and allows node dragging. Unmodified `V` / `H` only apply when the existing canvas key monitor would handle a key (canvas clicked last, same window, not editing text) and the canvas is live. `Cmd+V` stays paste. Leaving `tool` `nil` keeps the behavior above and does not steal `V` / `H`. Trackpad scroll-pan and pinch zoom are not gated by the tool.
+
 ```swift
 SwiftFlow(nodes: nodes, edges: edges, ..., selectionOnDrag: true) { ... }
 ```
@@ -49,9 +51,17 @@ Zoom in/out using the scroll wheel (on by default):
 SwiftFlow(nodes: nodes, edges: edges, ..., zoomOnScroll: true) { ... }
 ```
 
-### Pinch Zoom (iOS)
+### Pinch Zoom
 
-Enable two-finger pinch zoom (on by default):
+Enable two-finger pinch zoom (on by default). On iOS this uses SwiftUI's
+`MagnificationGesture`. On macOS the canvas listens for native `NSEvent`
+magnify events in the same window and only while the pointer is over the
+canvas; SwiftUI `MagnificationGesture` is not used there, because it does
+not reliably receive trackpad pinches (especially next to pane `DragGesture`).
+Pinch zooms around the pointer and is clamped to `Viewport.minZoom` /
+`Viewport.maxZoom`. Ending the pinch notifies `onMoveEnd`. Two-finger
+scroll stays a separate path (pan or zoom, depending on `panOnScroll` /
+`zoomOnScroll`) and is ignored while a pinch is in progress.
 
 ```swift
 SwiftFlow(nodes: nodes, edges: edges, ..., zoomOnPinch: true) { ... }

@@ -54,3 +54,12 @@
 
 /* Zoom-out button label */
 "Zoom out" = "Zoom out";
+
+/* Label of the move / selection tool, including the V shortcut */
+"Move (V)" = "Move (V)";
+
+/* Label of the hand / pan tool, including the H shortcut */
+"Hand tool (H)" = "Hand tool (H)";
+
+/* Accessibility name of the hand / move tool cluster */
+"Interaction tools" = "Interaction tools";

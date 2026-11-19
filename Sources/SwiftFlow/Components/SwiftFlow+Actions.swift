@@ -124,6 +124,19 @@ extension SwiftFlow {
         return true
       }
 
+      if tool != nil, let onToolChange,
+        let chosen = CanvasTool.shortcutTool(
+          key: key,
+          hasCommand: false,
+          hasOption: flags.contains(.option),
+          hasControl: flags.contains(.control),
+          hasShift: hasShift,
+          canvasLive: flowState.isInteractive)
+      {
+        onToolChange(chosen)
+        return true
+      }
+
       let nudge = hasShift ? keyboardShortcuts.shiftNudgeDistance : keyboardShortcuts.nudgeDistance
       switch event.keyCode {
       case KeyCode.leftArrow.rawValue: nudgeSelected(dx: -nudge, dy: 0)

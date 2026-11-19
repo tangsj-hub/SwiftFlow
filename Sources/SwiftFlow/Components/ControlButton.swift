@@ -9,13 +9,16 @@ import SwiftUI
 /// ```
 public struct ControlButton<Content: View>: View {
   public var action: () -> Void
+  public var tooltip: String
   @ViewBuilder public var content: () -> Content
 
   public init(
     action: @escaping () -> Void,
+    tooltip: String = "",
     @ViewBuilder content: @escaping () -> Content
   ) {
     self.action = action
+    self.tooltip = tooltip
     self.content = content
   }
 
@@ -26,5 +29,6 @@ public struct ControlButton<Content: View>: View {
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .flowHoverTip(tooltip)
   }
 }

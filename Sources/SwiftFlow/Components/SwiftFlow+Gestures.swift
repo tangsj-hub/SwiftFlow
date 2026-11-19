@@ -36,10 +36,13 @@ extension SwiftFlow {
     DragGesture(minimumDistance: 3)
       .onChanged { value in
         guard flowState.isInteractive else { return }
-        if shouldDrawSelectionBox() && elementsSelectable {
+        switch paneDragAction {
+        case .selectionBox:
           handleSelectionDrag(value)
-        } else if panOnDrag {
+        case .pan:
           handlePanDrag(value)
+        case .none:
+          break
         }
       }
       .onEnded { _ in
@@ -52,13 +55,20 @@ extension SwiftFlow {
       }
   }
 
-  private func shouldDrawSelectionBox() -> Bool {
+  private var paneDragAction: CanvasTool.PaneDragAction {
     #if canImport(AppKit)
       let shiftDown = NSEvent.modifierFlags.contains(.shift)
     #else
       let shiftDown = false
     #endif
-    return selectionOnDrag ? !shiftDown : shiftDown
+    return CanvasTool.paneDragAction(
+      tool: tool,
+      panOnDrag: panOnDrag,
+      selectionOnDrag: selectionOnDrag,
+      shiftDown: shiftDown,
+      isInteractive: flowState.isInteractive,
+      elementsSelectable: elementsSelectable
+    )
   }
 
   private func handlePanDrag(_ value: DragGesture.Value) {
@@ -142,7 +152,30 @@ extension SwiftFlow {
 
 extension SwiftFlow {
 
-  func nodeDragGesture(node: Node<NodeData>) -> some Gesture {
+  /// Pan the viewport from a node while the hand tool is active.
+  /// `minimumDistance` is a little higher than the empty-pane gesture so
+  /// buttons and menus on the node still receive clean clicks.
+  func nodePanGesture() -> some Gesture {
+    DragGesture(minimumDistance: 6)
+      .onChanged { value in
+        guard flowState.isInteractive else { return }
+        if viewportDragStart == nil {
+          suppressClickAfterPan = true
+        }
+        handlePanDrag(value)
+      }
+      .onEnded { _ in
+        if viewportDragStart != nil {
+          viewportDragStart = nil
+          onMoveEnd?(viewport)
+        }
+        DispatchQueue.main.async {
+          suppressClickAfterPan = false
+        }
+      }
+  }
+
+    func nodeDragGesture(node: Node<NodeData>) -> some Gesture {
     DragGesture(minimumDistance: 1, coordinateSpace: .global)
       .onChanged { value in
         if selectNodesOnDrag && !node.selected && node.selectable && elementsSelectable {

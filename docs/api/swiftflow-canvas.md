@@ -51,7 +51,7 @@ SwiftFlow(
 | `panOnScroll`         | `Bool`            | `false`     | Pan on scroll (macOS) instead of zoom                 |
 | `panOnScrollMode`     | `PanOnScrollMode` | `.free`     | `.free`, `.vertical`, or `.horizontal`; restricts scroll panning only (drag panning is free) |
 | `zoomOnScroll`        | `Bool`            | `true`      | Zoom with scroll wheel (macOS)                        |
-| `zoomOnPinch`         | `Bool`            | `true`      | Zoom with pinch gesture (iOS)                         |
+| `zoomOnPinch`         | `Bool`            | `true`      | Zoom with pinch (iOS gesture; macOS native magnify)   |
 | `zoomOnDoubleClick`   | `Bool`            | `true`      | Double-tapping the pane zooms in by a factor of 2 around the view center |
 | `selectionOnDrag`     | `Bool`            | `false`     | Draw selection box on drag (instead of panning)       |
 | `selectNodesOnDrag`   | `Bool`            | `true`      | Auto-select a node when dragging it                   |

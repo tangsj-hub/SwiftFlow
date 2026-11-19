@@ -61,13 +61,19 @@ public struct SwiftFlow<
   public var panOnScrollMode: PanOnScrollMode
   /// Whether scrolling zooms around the pointer (macOS).
   public var zoomOnScroll: Bool
-  /// Whether pinch gestures zoom.
+  /// Whether pinch gestures zoom (iOS MagnificationGesture; macOS native magnify).
   public var zoomOnPinch: Bool
   /// Whether double-tapping the pane zooms in by a factor of 2.
   public var zoomOnDoubleClick: Bool
   /// When `true`, dragging the pane draws a selection box (Shift+drag pans). When `false`,
   /// Shift+drag draws it.
   public var selectionOnDrag: Bool
+  /// Exclusive pan (hand) vs pointer (mouse) tool. `nil` keeps the historical mix of
+  /// `panOnDrag` / `selectionOnDrag` with nodes still draggable.
+  public var tool: CanvasTool?
+  /// Called when the hand / move shortcuts change `tool`. The host should write this
+  /// into the same state passed as `tool` and into `Controls`.
+  public var onToolChange: ((CanvasTool) -> Void)?
   /// Whether dragging an unselected node selects it.
   public var selectNodesOnDrag: Bool
   /// Whether the selection box selects partially covered nodes or only fully covered ones.
@@ -222,6 +228,7 @@ public struct SwiftFlow<
   @State var previousSelectedNodes: Set<String> = []
   @State var previousSelectedEdges: Set<String> = []
   @State var selectionDragStarted: Bool = false
+  @State var suppressClickAfterPan: Bool = false
   @State var didInitialFitView: Bool = false
 
   /// Element with canvas keyboard focus (macOS; Tab / Shift+Tab).
@@ -251,6 +258,8 @@ public struct SwiftFlow<
     zoomOnPinch: Bool = true,
     zoomOnDoubleClick: Bool = true,
     selectionOnDrag: Bool = false,
+    tool: CanvasTool? = nil,
+    onToolChange: ((CanvasTool) -> Void)? = nil,
     selectNodesOnDrag: Bool = true,
     selectionMode: SelectionMode = .partial,
     connectionMode: ConnectionMode = .strict,
@@ -324,6 +333,8 @@ public struct SwiftFlow<
     self.zoomOnPinch = zoomOnPinch
     self.zoomOnDoubleClick = zoomOnDoubleClick
     self.selectionOnDrag = selectionOnDrag
+    self.tool = tool
+    self.onToolChange = onToolChange
     self.selectNodesOnDrag = selectNodesOnDrag
     self.selectionMode = selectionMode
     self.connectionMode = connectionMode
@@ -578,6 +589,8 @@ extension SwiftFlow where Overlay == EmptyView, EdgeData: Equatable & Sendable &
     zoomOnPinch: Bool = true,
     zoomOnDoubleClick: Bool = true,
     selectionOnDrag: Bool = false,
+    tool: CanvasTool? = nil,
+    onToolChange: ((CanvasTool) -> Void)? = nil,
     selectNodesOnDrag: Bool = true,
     selectionMode: SelectionMode = .partial,
     connectionMode: ConnectionMode = .strict,
@@ -643,7 +656,7 @@ extension SwiftFlow where Overlay == EmptyView, EdgeData: Equatable & Sendable &
       panOnScroll: panOnScroll, panOnScrollMode: panOnScrollMode,
       zoomOnScroll: zoomOnScroll, zoomOnPinch: zoomOnPinch,
       zoomOnDoubleClick: zoomOnDoubleClick, selectionOnDrag: selectionOnDrag,
-      selectNodesOnDrag: selectNodesOnDrag, selectionMode: selectionMode,
+      tool: tool, onToolChange: onToolChange, selectNodesOnDrag: selectNodesOnDrag, selectionMode: selectionMode,
       connectionMode: connectionMode, connectionLineType: connectionLineType,
       backgroundVariant: backgroundVariant, snapToGrid: snapToGrid, snapGrid: snapGrid,
       theme: theme, colorMode: colorMode, zIndexMode: zIndexMode, nodeOrigin: nodeOrigin,

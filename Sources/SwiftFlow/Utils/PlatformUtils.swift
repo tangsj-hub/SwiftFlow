@@ -53,7 +53,7 @@ extension View {
 
 #if canImport(AppKit)
   /// Cursor types for interactive flow elements.
-  public enum FlowCursor {
+  public enum FlowCursor: Equatable, Sendable {
     case grab, grabbing, pointer, crosshair, `default`
 
     var nsCursor: NSCursor {
@@ -218,81 +218,148 @@ extension View {
   }
 }
 
-// MARK: - macOS Scroll Wheel Handling
+// MARK: - macOS Trackpad Scroll and Magnify
 
 #if canImport(AppKit)
-  struct ScrollWheelModifier: ViewModifier {
-    let onScroll: (CGSize, CGPoint) -> Void
+  /// A same-window trackpad event already converted into view coordinates.
+  /// Tests drive the monitor through this type instead of synthesizing NSEvents
+  /// with private CGEvent fields.
+  struct TrackpadCanvasNSEvent {
+    enum Kind {
+      case scroll(delta: CGSize, ended: Bool, phaseBegan: Bool, isMomentum: Bool)
+      case magnify(increment: CGFloat, ended: Bool)
+    }
+
+    var kind: Kind
+    var isSameWindow: Bool
+    var locationInView: CGPoint
+  }
+
+  struct TrackpadCanvasModifier: ViewModifier {
+    var onScroll: ((CGSize, CGPoint, Bool) -> Void)?
+    var onMagnify: ((CGFloat, CGPoint, Bool) -> Void)?
 
     func body(content: Content) -> some View {
-      content.overlay(ScrollWheelView(onScroll: onScroll))
+      content.overlay(TrackpadCanvasView(onScroll: onScroll, onMagnify: onMagnify))
     }
   }
 
-  /// Monitors scroll-wheel events via a local event monitor while passing through
-  /// all left-click, drag, and hover events to underlying SwiftUI content.
-  private struct ScrollWheelView: NSViewRepresentable {
-    let onScroll: (CGSize, CGPoint) -> Void
+  /// Local-monitor bridge for scroll and native magnify. The view itself is
+  /// pass-through so SwiftUI keeps node drag, pane drag, and controls.
+  private struct TrackpadCanvasView: NSViewRepresentable {
+    var onScroll: ((CGSize, CGPoint, Bool) -> Void)?
+    var onMagnify: ((CGFloat, CGPoint, Bool) -> Void)?
 
-    func makeNSView(context: Context) -> ScrollWheelNSView {
-      let view = ScrollWheelNSView()
+    func makeNSView(context: Context) -> TrackpadCanvasNSView {
+      let view = TrackpadCanvasNSView()
       view.onScroll = onScroll
+      view.onMagnify = onMagnify
       return view
     }
 
-    func updateNSView(_ nsView: ScrollWheelNSView, context: Context) {
+    func updateNSView(_ nsView: TrackpadCanvasNSView, context: Context) {
       nsView.onScroll = onScroll
+      nsView.onMagnify = onMagnify
+    }
+  }
+
+  final class TrackpadCanvasNSView: NSView {
+    override var isFlipped: Bool { true }
+    var onScroll: ((CGSize, CGPoint, Bool) -> Void)?
+    var onMagnify: ((CGFloat, CGPoint, Bool) -> Void)?
+    var router = TrackpadCanvasRouter()
+    private var eventMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      removeMonitor()
+      guard window != nil else { return }
+      eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) {
+        [weak self] event in
+        guard let self else { return event }
+        let outcome = self.route(Self.sample(from: event, in: self))
+        switch outcome {
+        case .pass: return event
+        case .consume, .scroll, .magnify: return nil
+        }
+      }
     }
 
-    final class ScrollWheelNSView: NSView {
-      override var isFlipped: Bool { true }
-      var onScroll: ((CGSize, CGPoint) -> Void)?
-      private var eventMonitor: Any?
-
-      override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        removeMonitor()
-        guard window != nil else { return }
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
-          [weak self] event in
-          guard let self, let onScroll = self.onScroll else { return event }
-          guard event.window == self.window else { return event }
-          let location = self.convert(event.locationInWindow, from: nil)
-          guard self.bounds.contains(location) else { return event }
-
-          var delta = CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY)
-          // Precise events without a gesture phase are momentum events; use a
-          // higher threshold so a decaying swipe does not drift the viewport.
-          let isMomentum = event.hasPreciseScrollingDeltas && event.phase.isEmpty
-          let threshold: CGFloat = isMomentum ? 0.5 : 0.1
-          guard abs(delta.width) > threshold || abs(delta.height) > threshold else {
-            return event
-          }
-          if !event.hasPreciseScrollingDeltas {
-            // Mouse wheels report line deltas; scale them to points.
-            delta = CGSize(width: delta.width * 10, height: delta.height * 10)
-          }
-          onScroll(delta, location)
-          return nil  // consume
-        }
+    /// Shared by the local monitor and tests.
+    @discardableResult
+    func route(_ event: TrackpadCanvasNSEvent) -> TrackpadCanvasRouter.Outcome {
+      let outcome: TrackpadCanvasRouter.Outcome
+      switch event.kind {
+      case .magnify(let increment, let ended):
+        outcome = router.handleMagnify(
+          increment: increment, ended: ended, isSameWindow: event.isSameWindow,
+          isInBounds: bounds.contains(event.locationInView), enabled: onMagnify != nil)
+      case .scroll(let delta, let ended, let phaseBegan, let isMomentum):
+        outcome = router.handleScroll(
+          delta: delta, ended: ended, phaseBegan: phaseBegan, isMomentum: isMomentum,
+          isSameWindow: event.isSameWindow, isInBounds: bounds.contains(event.locationInView),
+          enabled: onScroll != nil)
       }
-
-      private func removeMonitor() {
-        if let monitor = eventMonitor {
-          NSEvent.removeMonitor(monitor)
-          eventMonitor = nil
-        }
+      switch outcome {
+      case .scroll(let delta, let ended):
+        onScroll?(delta, event.locationInView, ended)
+      case .magnify(let factor, let ended):
+        onMagnify?(factor, event.locationInView, ended)
+      case .pass, .consume:
+        break
       }
+      return outcome
+    }
 
-      override func hitTest(_ point: NSPoint) -> NSView? {
-        nil  // pass-through: let SwiftUI views handle all mouse events
+    static func sample(from event: NSEvent, in view: TrackpadCanvasNSView) -> TrackpadCanvasNSEvent {
+      let location = view.convert(event.locationInWindow, from: nil)
+      let sameWindow = event.window == view.window
+      if event.type == .magnify {
+        return TrackpadCanvasNSEvent(
+          kind: .magnify(increment: event.magnification, ended: isGestureEnd(event)),
+          isSameWindow: sameWindow, locationInView: location)
       }
+      var delta = CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY)
+      if !event.hasPreciseScrollingDeltas {
+        // Mouse wheels report line deltas; scale them to points.
+        delta = CGSize(width: delta.width * 10, height: delta.height * 10)
+      }
+      let isMomentum = event.hasPreciseScrollingDeltas && event.phase.isEmpty
+      return TrackpadCanvasNSEvent(
+        kind: .scroll(
+          delta: delta, ended: isGestureEnd(event),
+          phaseBegan: event.phase.contains(.began), isMomentum: isMomentum),
+        isSameWindow: sameWindow, locationInView: location)
+    }
+
+    static func isGestureEnd(_ event: NSEvent) -> Bool {
+      event.phase.contains(.ended) || event.phase.contains(.cancelled)
+        || event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled)
+    }
+
+    private func removeMonitor() {
+      if let monitor = eventMonitor {
+        NSEvent.removeMonitor(monitor)
+        eventMonitor = nil
+      }
+    }
+
+    override func removeFromSuperview() {
+      removeMonitor()
+      super.removeFromSuperview()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+      nil  // pass-through: let SwiftUI views handle mouse events
     }
   }
 
   extension View {
-    func onScrollWheel(_ handler: @escaping (CGSize, CGPoint) -> Void) -> some View {
-      modifier(ScrollWheelModifier(onScroll: handler))
+    func onCanvasTrackpadEvents(
+      onScroll: ((CGSize, CGPoint, Bool) -> Void)?,
+      onMagnify: ((CGFloat, CGPoint, Bool) -> Void)?
+    ) -> some View {
+      modifier(TrackpadCanvasModifier(onScroll: onScroll, onMagnify: onMagnify))
     }
   }
 #endif

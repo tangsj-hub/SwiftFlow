@@ -8,7 +8,14 @@ extension SwiftFlow {
   var interactionLayer: some View {
     Color.clear
       .contentShape(Rectangle())
-      .flowCursor(.grab)
+      .flowCursor(
+        CanvasTool.paneCursor(
+          tool: tool,
+          panOnDrag: panOnDrag,
+          selectionOnDrag: selectionOnDrag,
+          isInteractive: flowState.isInteractive
+        )
+      )
       .onTapGesture {
         endTextEditing()
         onPaneClick?()
@@ -25,17 +32,45 @@ extension SwiftFlow {
         }
       }
       .gesture(canvasDragGesture)
-      .simultaneousGesture(flowState.isInteractive && zoomOnPinch ? magnificationGesture : nil)
+      // macOS pinch is handled by the AppKit magnify monitor below.
+      // MagnificationGesture is kept for iOS only so a working native
+      // magnify path cannot double-apply zoom.
+      #if !canImport(AppKit)
+        .simultaneousGesture(flowState.isInteractive && zoomOnPinch ? magnificationGesture : nil)
+      #endif
       #if canImport(AppKit)
-        .if(panOnScroll || zoomOnScroll) { view in
-          view.onScrollWheel { delta, location in
-            guard flowState.isInteractive else { return }
-            if panOnScroll {
-              panViewportByScroll(delta)
-            } else if zoomOnScroll {
-              zoomViewportByScroll(delta.height, at: location)
-            }
-          }
+        .if(panOnScroll || zoomOnScroll || zoomOnPinch) { view in
+          view.onCanvasTrackpadEvents(
+            onScroll: (panOnScroll || zoomOnScroll)
+              ? { delta, location, ended in
+                guard flowState.isInteractive else { return }
+                if ended {
+                  onMoveEnd?(viewport)
+                  return
+                }
+                if panOnScroll {
+                  panViewportByScroll(delta)
+                } else if zoomOnScroll {
+                  zoomViewportByScroll(delta.height, at: location)
+                }
+              } : nil,
+            onMagnify: zoomOnPinch
+              ? { factor, location, ended in
+                guard flowState.isInteractive else { return }
+                if ended {
+                  viewportZoomStart = nil
+                  onMoveEnd?(viewport)
+                  return
+                }
+                if viewportZoomStart == nil {
+                  viewportZoomStart = viewport.zoom
+                  onMoveStart?(viewport)
+                }
+                guard let start = viewportZoomStart else { return }
+                viewport = viewport.zoomed(to: start * factor, around: location)
+                onMove?(viewport)
+              } : nil
+          )
         }
       #endif
       .if(onPaneContextMenu != nil) { view in
@@ -140,7 +175,15 @@ extension SwiftFlow {
   }
 
   private func nodeView(_ node: Node<NodeData>) -> some View {
-    let isDraggable = flowState.isInteractive && nodesDraggable && node.draggable
+    let nodeKind = CanvasTool.nodeDragKind(
+      tool: tool,
+      panOnDrag: panOnDrag,
+      nodesDraggable: nodesDraggable,
+      isInteractive: flowState.isInteractive,
+      nodeDraggable: node.draggable
+    )
+    let isDraggable = nodeKind == .dragNode
+    let pansFromNode = nodeKind == .panCanvas
     let isSelectable = flowState.isInteractive && elementsSelectable && node.selectable
     return ZStack(alignment: .topLeading) {
       nodeContent(node)
@@ -158,7 +201,9 @@ extension SwiftFlow {
     .fixedSize()
     .contentShape(Rectangle())
     .gesture(isDraggable ? nodeDragGesture(node: node) : nil)
+    .gesture(pansFromNode ? nodePanGesture() : nil)
     .onTapGesture(count: 2) {
+      guard !suppressClickAfterPan else { return }
       if node.expandable {
         var toggled = node
         toggled.expanded.toggle()
@@ -168,6 +213,7 @@ extension SwiftFlow {
     }
     .simultaneousGesture(
       TapGesture(count: 1).onEnded {
+        guard !suppressClickAfterPan else { return }
         onNodeClick?(node)
         guard isSelectable else { return }
         selectNode(node)
@@ -187,7 +233,15 @@ extension SwiftFlow {
         onNodeContextMenu?(node)
       }
     }
-    .if(isDraggable) { $0.flowCursor(.grab) }
+    .flowCursor(
+      CanvasTool.nodeCursor(
+        tool: tool,
+        panOnDrag: panOnDrag,
+        nodesDraggable: nodesDraggable,
+        isInteractive: flowState.isInteractive,
+        nodeDraggable: node.draggable
+      )
+    )
     .accessibilityElement(children: .combine)
     .accessibilityLabel("\(accessibilityConfig.nodeRoleDescription) \(node.id)")
     .accessibilityHint(
